@@ -121,7 +121,7 @@ AI suspicion เดิม {score}%
 # UI
 # =====================================================
 
-st.title("🩺 AI Fracture Assistant")
+st.title("🩺 AI Fracture Assistant by KU KPS Infirmary")
 
 # ---------------- STEP 1 ----------------
 if st.session_state.step == 1:
