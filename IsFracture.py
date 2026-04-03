@@ -1,6 +1,8 @@
 import streamlit as st
 import base64
 from openai import OpenAI
+from PIL import Image
+import io
 
 # -----------------------
 # GPT Setup
@@ -19,10 +21,17 @@ if "photos" not in st.session_state:
     st.session_state.photos = {}
 
 # -----------------------
-# Helper
+# Image Encode (Mobile Safe)
 # -----------------------
 def encode(img):
-    return base64.b64encode(img.read()).decode()
+
+    image = Image.open(img)
+    image.thumbnail((1024,1024))
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=85)
+
+    return base64.b64encode(buffer.getvalue()).decode()
 
 # -----------------------
 # Joint Detection
@@ -34,12 +43,12 @@ def detect_joint():
     o = encode(st.session_state.photos["oblique"])
 
     prompt = """
-ภาพเป็นข้ออะไร ตอบเพียง:
-มือ / เท้า / เข่า
+ภาพเป็นข้ออะไร ตอบเพียงคำเดียว:
+มือ / เท้า / เข่า / ข้อศอก
 """
 
     response = client.chat.completions.create(
-        model="gpt-5.2",
+        model="gpt-4o-mini",
         messages=[{
             "role":"user",
             "content":[
@@ -54,7 +63,6 @@ def detect_joint():
 
     return response.choices[0].message.content.strip()
 
-
 # -----------------------
 # Fracture Analysis
 # -----------------------
@@ -65,12 +73,12 @@ def analyze_fracture():
     o = encode(st.session_state.photos["oblique"])
 
     prompt = """
-ประเมินระดับความสงสัยกระดูกบาดเจ็บหรือหัก (%)
+ประเมินระดับความสงสัยว่ากระดูกบาดเจ็บหรือหัก (%)
 ตอบเฉพาะตัวเลข เช่น 45
 """
 
     response = client.chat.completions.create(
-        model="gpt-5.2",
+        model="gpt-4o-mini",
         messages=[{
             "role":"user",
             "content":[
@@ -85,7 +93,6 @@ def analyze_fracture():
 
     return int(response.choices[0].message.content.strip())
 
-
 # -----------------------
 # Reanalysis
 # -----------------------
@@ -95,7 +102,7 @@ def reanalyze(joint, score, answers):
 ข้อ: {joint}
 AI suspicion เดิม {score}%
 
-คำตอบ Ottawa:
+คำตอบ clinical rule:
 {answers}
 
 ปรับระดับความสงสัยใหม่ (%)
@@ -103,19 +110,18 @@ AI suspicion เดิม {score}%
 """
 
     response = client.chat.completions.create(
-        model="gpt-5.2",
+        model="gpt-4o-mini",
         messages=[{"role":"user","content":prompt}],
         temperature=0
     )
 
     return int(response.choices[0].message.content.strip())
 
-
 # =====================================================
 # UI
 # =====================================================
 
-st.title("🩺 AI Ottawa Fracture Assistant")
+st.title("🩺 AI Fracture Assistant")
 
 # ---------------- STEP 1 ----------------
 if st.session_state.step == 1:
@@ -128,7 +134,6 @@ if st.session_state.step == 1:
         st.session_state.step = 2
         st.rerun()
 
-
 # ---------------- STEP 2 ----------------
 elif st.session_state.step == 2:
 
@@ -140,7 +145,6 @@ elif st.session_state.step == 2:
         st.session_state.step = 3
         st.rerun()
 
-
 # ---------------- STEP 3 ----------------
 elif st.session_state.step == 3:
 
@@ -150,12 +154,11 @@ elif st.session_state.step == 3:
     if img:
         st.session_state.photos["oblique"] = img
 
-        with st.spinner("AI กำลังตรวจสอบชนิดข้อ..."):
+        with st.spinner("AI ตรวจสอบชนิดข้อ..."):
             st.session_state.joint = detect_joint()
 
         st.session_state.step = 4
         st.rerun()
-
 
 # ---------------- STEP 4 ----------------
 elif st.session_state.step == 4:
@@ -167,7 +170,6 @@ elif st.session_state.step == 4:
     if agree == "N":
         st.warning("โปรดถ่ายภาพข้อตามความเป็นจริง")
 
-        # auto reset
         st.session_state.photos = {}
         st.session_state.step = 1
         st.session_state.pop("suspicion", None)
@@ -184,31 +186,43 @@ elif st.session_state.step == 4:
             f"{st.session_state.suspicion}%"
         )
 
-        joint_text = st.session_state.joint
+        jt = st.session_state.joint
 
-        if "เท้า" in joint_text:
+        if "เท้า" in jt:
             joint_type = "ankle"
-        elif "เข่า" in joint_text:
+        elif "เข่า" in jt:
             joint_type = "knee"
+        elif "ข้อศอก" in jt:
+            joint_type = "elbow"
         else:
             joint_type = "wrist"
-
 
 # ---------------- Questionnaire ----------------
         if st.session_state.suspicion < 60:
 
-            st.subheader("🔎 Ottawa Clinical Questions")
+            st.subheader("🔎 Clinical Questions")
 
-            q1 = st.radio("ลงน้ำหนักไม่ได้ 4 ก้าว?", ["ไม่ใช่","ใช่"])
-            q2 = st.radio("กดเจ็บเฉพาะจุดกระดูก?", ["ไม่ใช่","ใช่"])
-            q3 = st.radio("บวมมากหรือผิดรูป?", ["ไม่ใช่","ใช่"])
+            if joint_type == "ankle":
+                q1 = st.radio("ลงน้ำหนักไม่ได้ 4 ก้าว?", ["ไม่ใช่","ใช่"])
+                q2 = st.radio("กดเจ็บตาตุ่มหรือ midfoot?", ["ไม่ใช่","ใช่"])
+
+            elif joint_type == "knee":
+                q1 = st.radio("อายุ ≥55 ปี?", ["ไม่ใช่","ใช่"])
+                q2 = st.radio("งอเข่าไม่ได้ 90°?", ["ไม่ใช่","ใช่"])
+
+            elif joint_type == "elbow":
+                q1 = st.radio("เหยียดข้อศอกสุดไม่ได้?", ["ไม่ใช่","ใช่"])
+                q2 = st.radio("กดเจ็บบริเวณ radial head/olecranon?", ["ไม่ใช่","ใช่"])
+
+            else:
+                q1 = st.radio("กดเจ็บ distal radius หรือ scaphoid?", ["ไม่ใช่","ใช่"])
+                q2 = st.radio("บวม/ผิดรูป?", ["ไม่ใช่","ใช่"])
 
             if st.button("🧠 วิเคราะห์ใหม่"):
 
                 answers = f"""
-ลงน้ำหนักไม่ได้: {q1}
-กดเจ็บกระดูก: {q2}
-บวม/ผิดรูป: {q3}
+Q1: {q1}
+Q2: {q2}
 """
 
                 new_score = reanalyze(
@@ -223,7 +237,6 @@ elif st.session_state.step == 4:
                     f"ระดับความสงสัยใหม่: {new_score}%"
                 )
 
-
 # ---------------- Final Advice ----------------
         if st.session_state.suspicion >= 60:
             st.error("🔴 แนะนำถ่าย X-ray ทันที")
@@ -234,13 +247,12 @@ elif st.session_state.step == 4:
         else:
             st.success("🟢 ความเสี่ยงต่ำ เฝ้าดูอาการได้")
 
-
 # ---------------- References ----------------
 st.markdown("""
 ---
 **References**
 
-- Stiell IG. Ottawa Ankle Rules. Ann Emerg Med.
-- Ottawa Knee Rule. JAMA.
-- Bachmann LM. BMJ Meta-analysis Ottawa Rules.
+- Ottawa Ankle Rules — Stiell IG, Ann Emerg Med  
+- Ottawa Knee Rule — JAMA  
+- Elbow Extension Test — Appelboam A, BMJ  
 """)
